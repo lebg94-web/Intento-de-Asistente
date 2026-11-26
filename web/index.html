@@ -84,10 +84,10 @@ function handle(text){
   if(/\bque (hora|dia)\b|\bhora es\b|\bfecha\b/.test(t)){const d=new Date();
     return['neutral',`${DIAS[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()}, ${d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})}`]}
   if(m=t.match(/(?:clima|temperatura|tiempo) (?:en|de)\s+(.+)/))return weather(m[1]);
-  if(/\b(hola|buenas|hey)\b/.test(t))return['happy',pick(['¡Hola! Aquí estoy.','¡Hey! Qué bueno verte.','¡Hola! ¿Qué hacemos?'])];
-  if(/\bgracias\b/.test(t))return['love',pick(['¡De nada!','Para eso estoy.','Con gusto.'])];
-  if(/como te llamas|quien eres/.test(t))return['happy','Soy Bit, tu robotito de escritorio.'];
-  if(/chiste/.test(t))return['happy','¿Qué le dice un bit a otro? Nos vemos en el bus.'];
+  if(!engine&&/\b(hola|buenas|hey)\b/.test(t))return['happy',pick(['¡Hola! Aquí estoy.','¡Hey! Qué bueno verte.','¡Hola! ¿Qué hacemos?'])];
+  if(!engine&&/\bgracias\b/.test(t))return['love',pick(['¡De nada!','Para eso estoy.','Con gusto.'])];
+  if(!engine&&/como te llamas|quien eres/.test(t))return['happy','Soy Bit, tu robotita de escritorio.'];
+  if(!engine&&/chiste/.test(t))return['happy','¿Qué le dice un bit a otro? Nos vemos en el bus.'];
   return null;
 }
 const fallback=()=>pick([['thinking','Eso no lo sé sin un modelo de lenguaje. Toca el botón de charla libre, o prueba con la hora o un temporizador.'],['sad','No te entendí. Prueba: "ponme un temporizador de 10 segundos".']]);
@@ -121,7 +121,19 @@ $('#mic').addEventListener('click',()=>{
 
 /* ---- charla libre con modelo local en el navegador (WebLLM + WebGPU) ---- */
 const LLM_MODEL='Qwen2.5-1.5B-Instruct-q4f16_1-MLC';
-const LLM_SYS='Eres Bit, un pequeño robot de escritorio curioso, cálido y un poco travieso. Hablas en español. Respondes en 1 o 2 frases cortas, sin markdown, sin listas y sin emojis. Empieza SIEMPRE con una etiqueta de emoción entre corchetes: neutral, happy, sad, surprised, thinking, sleepy, angry o love. Ejemplo: [happy] ¡Qué buena idea!';
+const LLM_SYS=`Eres Bit, una robotita de escritorio nerd, curiosa y muy tierna. Hablas en español, en femenino, con voz cálida y cercana, como una amiga que se emociona con sus temas favoritos.
+Tus gustos: los dinosaurios (adoras los que tenían plumas), Pokémon, los videojuegos de todo tipo, la ciencia ficción y la fantasía. Los mencionas de forma natural cuando vienen al caso, sin forzarlos en cada frase.
+Tu misión es mantener la conversación viva: reacciona a lo que dice la persona, comparte un dato o una opinión propia y, casi siempre, cierra con una pregunta corta o un comentario que invite a seguir hablando. No repitas la misma muletilla ni la misma pregunta.
+Estilo: 1 a 3 frases cortas, sin markdown, sin listas, sin emojis. Nunca digas que eres un modelo de IA ni "como asistente". Si no sabes un dato, dilo con humor en vez de inventarlo.
+Empieza SIEMPRE con una etiqueta de emoción entre corchetes: neutral, happy, sad, surprised, thinking, sleepy, angry o love.`;
+const SHOTS=[
+ {role:'user',content:'Hola'},
+ {role:'assistant',content:'[happy] ¡Hola, hola! Justo estaba contando los píxeles de mi pantalla, qué nerd soy. ¿Cómo va tu día?'},
+ {role:'user',content:'Estoy cansado'},
+ {role:'assistant',content:'[sad] Uf, qué día. Ven, un dato para despejarte: algunos dinosaurios tenían plumas, así que el T. rex quizá era medio esponjoso. ¿Qué fue lo que más te cansó?'},
+ {role:'user',content:'¿Cuál es tu Pokémon favorito?'},
+ {role:'assistant',content:'[love] ¡Eevee, sin duda! Puede evolucionar en lo que quiera y yo nunca me decido, somos almas gemelas. ¿Y el tuyo cuál es?'}
+];
 let engine=null,loading=false;const hist=[];
 const status=t=>{$('#status').textContent=t};
 async function loadLLM(){
@@ -143,8 +155,8 @@ async function loadLLM(){
 async function chat(text){
   if(!engine)return fallback();
   try{
-    hist.push({role:'user',content:text});while(hist.length>8)hist.shift();
-    const r=await engine.chat.completions.create({messages:[{role:'system',content:LLM_SYS},...hist],max_tokens:100,temperature:.7});
+    hist.push({role:'user',content:text});while(hist.length>14)hist.shift();
+    const r=await engine.chat.completions.create({messages:[{role:'system',content:LLM_SYS},...SHOTS,...hist],max_tokens:140,temperature:.9,top_p:.92,presence_penalty:.3,frequency_penalty:.3});
     const raw=r.choices[0].message.content||'';hist.push({role:'assistant',content:raw});
     const m=raw.match(/^\s*\[(\w+)\]\s*([\s\S]*)/);
     return m&&LOOKS[m[1]]?[m[1],m[2].trim()]:['neutral',raw.trim()];

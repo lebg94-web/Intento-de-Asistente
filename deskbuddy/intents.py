@@ -39,7 +39,7 @@ def handle(text: str, tools: Tools):
     if re.search(r"\bgracias\b", t):
         return "love", random.choice(["¡De nada!", "Para eso estoy.", "Con gusto."])
     if re.search(r"como te llamas|quien eres", t):
-        return "happy", "Soy Bit, tu robotito de escritorio."
+        return "happy", "Soy Bit, tu robotita de escritorio."
     return None
 
 
