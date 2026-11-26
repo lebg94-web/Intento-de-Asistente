@@ -1,4 +1,6 @@
 """Voz: escuchar (STT) y hablar (TTS). Cae a texto si no hay micrófono/librerías."""
+import json
+import os
 
 
 class Voice:
@@ -39,8 +41,14 @@ class Voice:
             except self.sr.WaitTimeoutError:
                 return ""
         try:
-            return self.rec.recognize_google(audio, language="es-MX")
+            if os.environ.get("DESKBUDDY_STT", "vosk") == "vosk":
+                # 100% offline: requiere carpeta ./model (vosk-model-small-es)
+                return json.loads(self.rec.recognize_vosk(audio, language="es")).get("text", "")
+            return self.rec.recognize_google(audio, language="es-MX")  # envía audio a Google
         except self.sr.UnknownValueError:
+            return ""
+        except Exception as e:
+            print(f"[voz] error de reconocimiento: {e}")
             return ""
 
     def speak(self, text: str):

@@ -70,7 +70,11 @@ class Tools:
             return f"Error: {e}"
 
     def _get_time(self) -> str:
-        return datetime.now().strftime("%A %d de %B de %Y, %H:%M")
+        d = datetime.now()
+        dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+        meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+                 "septiembre", "octubre", "noviembre", "diciembre"]
+        return f"{dias[d.weekday()]} {d.day} de {meses[d.month - 1]} de {d.year}, {d:%H:%M}"
 
     def _get_weather(self, city: str) -> str:
         q = urllib.parse.quote(city)

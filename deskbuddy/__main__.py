@@ -28,13 +28,14 @@ def main():
     tools = Tools(on_expression=set_expr, on_timer_done=lambda label: pending.put(label))
     brain = Brain(tools)
 
-    def say(text):
+    def say(text, keep=False):
         if face:
             face.set_speaking(True)
         voice.speak(text)
         if face:
             face.set_speaking(False)
-            set_expr("neutral")
+            if not keep:
+                set_expr("neutral")
 
     def loop():
         say(f"Hola, soy {NAME}. ¿En qué te ayudo?")
@@ -54,12 +55,12 @@ def main():
                 break
             set_expr("thinking")
             try:
-                reply = brain.ask(heard)
+                expr, reply = brain.ask(heard)
             except Exception as e:
-                set_expr("sad")
-                reply = "Uy, tuve un problema para pensar eso."
+                expr, reply = "sad", "Uy, tuve un problema para pensar eso."
                 print(f"[error] {e}", file=sys.stderr)
-            say(reply)
+            set_expr(expr)
+            say(reply, keep=True)
         if face:
             face.root.after(0, face.root.destroy)
 

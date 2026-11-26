@@ -1,4 +1,6 @@
-anthropic>=0.40
-pyttsx3>=2.90          # voz (texto a voz) offline
-SpeechRecognition>=3.10 # voz a texto
-PyAudio>=0.2.14        # micrófono (opcional; sin él usa modo texto)
+# Todo gratis y local por defecto
+pyttsx3>=2.90           # voz offline
+SpeechRecognition>=3.10 # micrófono
+PyAudio>=0.2.14         # micrófono (opcional; sin él usa teclado)
+vosk>=0.3.45            # reconocimiento de voz offline
+# anthropic>=0.40       # SOLO si usas DESKBUDDY_BRAIN=claude (de pago)
