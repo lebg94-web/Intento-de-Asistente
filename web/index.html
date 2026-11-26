@@ -19,6 +19,8 @@ h1 small{font:400 .8rem Inter,sans-serif;color:var(--muted)}
 .chips button{font:inherit;font-size:.85rem;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
 form{display:flex;gap:8px;max-width:520px;width:100%;align-self:center}
 input{flex:1;min-width:0;font:inherit;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
+#llm{border-style:dashed!important}
+#llm.ready{border-style:solid!important;border-color:var(--eye)!important}
 #mic{background:var(--eye)!important;padding:0 14px!important}
 #mic.on{background:var(--mouth)!important}
 form button{font:inherit;font-weight:600;padding:0 18px;border-radius:12px;border:0;background:var(--mouth);color:#fff}
@@ -28,6 +30,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--eye);outline-of
 <canvas id="screen" width="480" height="320"></canvas>
 <div id="log" aria-live="polite"></div>
 <div class="chips" id="chips"></div>
+<div class="chips"><button type="button" id="llm">🧠 Activar charla libre (≈1 GB, usa Wi-Fi)</button></div>
 <form id="f"><button type="button" id="mic" aria-label="Hablar">🎤</button><input id="q" autocomplete="off" placeholder="Háblale a Bit…" enterkeyhint="send"><button>Enviar</button></form>
 <script>
 const $=s=>document.querySelector(s);
@@ -85,8 +88,9 @@ function handle(text){
   if(/\bgracias\b/.test(t))return['love',pick(['¡De nada!','Para eso estoy.','Con gusto.'])];
   if(/como te llamas|quien eres/.test(t))return['happy','Soy Bit, tu robotito de escritorio.'];
   if(/chiste/.test(t))return['happy','¿Qué le dice un bit a otro? Nos vemos en el bus.'];
-  return pick([['thinking','Eso no lo sé sin un modelo de lenguaje. Prueba con la hora o un temporizador.'],['sad','No te entendí. Prueba: "ponme un temporizador de 10 segundos".']]);
+  return null;
 }
+const fallback=()=>pick([['thinking','Eso no lo sé sin un modelo de lenguaje. Toca el botón de charla libre, o prueba con la hora o un temporizador.'],['sad','No te entendí. Prueba: "ponme un temporizador de 10 segundos".']]);
 const WMO={0:'despejado',1:'mayormente despejado',2:'parcialmente nublado',3:'nublado',45:'niebla',48:'niebla',51:'llovizna',61:'lluvia ligera',63:'lluvia',65:'lluvia fuerte',71:'nieve ligera',73:'nieve',80:'chubascos',95:'tormenta'};
 async function weather(city){
   try{
@@ -98,7 +102,7 @@ async function weather(city){
 }
 function send(text){
   say('me',text);expr='thinking';
-  setTimeout(async()=>{let res=await handle(text);let[e,r]=res;expr=e;say('bot',r);speak(r);setTimeout(()=>{if(!speaking)expr='neutral'},4000)},400);
+  setTimeout(async()=>{let res=await handle(text);if(!res)res=await chat(text);let[e,r]=res;expr=e;say('bot',r);speak(r);setTimeout(()=>{if(!speaking)expr='neutral'},4000)},400);
 }
 $('#f').addEventListener('submit',e=>{e.preventDefault();const v=$('#q').value.trim();if(v){$('#q').value='';send(v)}});
 for(const c of ['Hola','¿Qué hora es?','Temporizador de 10 segundos','Cuéntame un chiste','Gracias']){
@@ -114,5 +118,39 @@ $('#mic').addEventListener('click',()=>{
   rec.onend=()=>{rec=null;$('#mic').classList.remove('on');if(expr==='listening')expr='neutral'};
   rec.start();
 });
+
+/* ---- charla libre con modelo local en el navegador (WebLLM + WebGPU) ---- */
+const LLM_MODEL='Qwen2.5-1.5B-Instruct-q4f16_1-MLC';
+const LLM_SYS='Eres Bit, un pequeño robot de escritorio curioso, cálido y un poco travieso. Hablas en español. Respondes en 1 o 2 frases cortas, sin markdown, sin listas y sin emojis. Empieza SIEMPRE con una etiqueta de emoción entre corchetes: neutral, happy, sad, surprised, thinking, sleepy, angry o love. Ejemplo: [happy] ¡Qué buena idea!';
+let engine=null,loading=false;const hist=[];
+const status=t=>{$('#status').textContent=t};
+async function loadLLM(){
+  if(engine||loading)return;
+  if(!navigator.gpu){say('bot','Tu navegador no tiene WebGPU, así que no puedo cargar el modelo. Prueba con Chrome actualizado en un celular reciente.');return}
+  loading=true;$('#llm').disabled=true;expr='thinking';
+  try{
+    const webllm=await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm');
+    engine=await webllm.CreateMLCEngine(LLM_MODEL,{initProgressCallback:p=>status(p.text.slice(0,60))});
+    $('#llm').textContent='🧠 Charla libre activa';$('#llm').classList.add('ready');status('modelo local · sin tokens');
+    try{localStorage.setItem('llm','on')}catch(e){}
+    say('bot','Listo, ya puedo conversar de cualquier tema.');speak('Listo, ya puedo conversar de cualquier tema.');
+  }catch(e){
+    engine=null;$('#llm').disabled=false;status('sin tokens · gratis');
+    say('bot','No pude cargar el modelo. Puede que tu celular no tenga memoria suficiente.');
+  }
+  loading=false;expr='neutral';
+}
+async function chat(text){
+  if(!engine)return fallback();
+  try{
+    hist.push({role:'user',content:text});while(hist.length>8)hist.shift();
+    const r=await engine.chat.completions.create({messages:[{role:'system',content:LLM_SYS},...hist],max_tokens:100,temperature:.7});
+    const raw=r.choices[0].message.content||'';hist.push({role:'assistant',content:raw});
+    const m=raw.match(/^\s*\[(\w+)\]\s*([\s\S]*)/);
+    return m&&LOOKS[m[1]]?[m[1],m[2].trim()]:['neutral',raw.trim()];
+  }catch(e){return['sad','Se me enredaron las ideas. Intenta otra vez.']}
+}
+$('#llm').addEventListener('click',loadLLM);
+try{if(localStorage.getItem('llm')==='on')loadLLM()}catch(e){}
 say('bot','¡Hola! Soy Bit. Toca el micrófono o escríbeme.');
 </script></body></html>
