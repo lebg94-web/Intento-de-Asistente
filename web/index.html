@@ -20,6 +20,7 @@ h1 small{font:400 .8rem Inter,sans-serif;color:var(--muted)}
 form{display:flex;gap:8px;max-width:520px;width:100%;align-self:center}
 input{flex:1;min-width:0;font:inherit;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
 #llm{border-style:dashed!important}
+#llm3{border-style:dashed!important}
 #llm.ready{border-style:solid!important;border-color:var(--eye)!important}
 #mic{background:var(--eye)!important;padding:0 14px!important}
 #mic.on{background:var(--mouth)!important}
@@ -30,7 +31,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--eye);outline-of
 <canvas id="screen" width="480" height="320"></canvas>
 <div id="log" aria-live="polite"></div>
 <div class="chips" id="chips"></div>
-<div class="chips"><button type="button" id="llm">🧠 Activar charla libre (≈1 GB, usa Wi-Fi)</button></div>
+<div class="chips"><button type="button" id="llm">🧠 Activar charla libre (≈1 GB, usa Wi-Fi)</button> <button type="button" id="llm3">✨ Probar modelo más inteligente (3B, ≈2 GB)</button></div>
 <form id="f"><button type="button" id="mic" aria-label="Hablar">🎤</button><input id="q" autocomplete="off" placeholder="Háblale a Bit…" enterkeyhint="send"><button>Enviar</button></form>
 <script>
 const $=s=>document.querySelector(s);
@@ -120,49 +121,62 @@ $('#mic').addEventListener('click',()=>{
 });
 
 /* ---- charla libre con modelo local en el navegador (WebLLM + WebGPU) ---- */
-const LLM_MODEL='Qwen2.5-1.5B-Instruct-q4f16_1-MLC';
-const LLM_SYS=`Eres Bit, una robotita de escritorio nerd, curiosa y muy tierna. Hablas en español, en femenino, con voz cálida y cercana, como una amiga que se emociona con sus temas favoritos.
-Tus gustos: los dinosaurios (adoras los que tenían plumas), Pokémon, los videojuegos de todo tipo, la ciencia ficción y la fantasía. Los mencionas de forma natural cuando vienen al caso, sin forzarlos en cada frase.
-Tu misión es mantener la conversación viva: reacciona a lo que dice la persona, comparte un dato o una opinión propia y, casi siempre, cierra con una pregunta corta o un comentario que invite a seguir hablando. No repitas la misma muletilla ni la misma pregunta.
-Estilo: 1 a 3 frases cortas, sin markdown, sin listas, sin emojis. Nunca digas que eres un modelo de IA ni "como asistente". Si no sabes un dato, dilo con humor en vez de inventarlo.
-Empieza SIEMPRE con una etiqueta de emoción entre corchetes: neutral, happy, sad, surprised, thinking, sleepy, angry o love.`;
+const MODELS={small:'Qwen2.5-1.5B-Instruct-q4f16_1-MLC',big:'Qwen2.5-3B-Instruct-q4f16_1-MLC'};
+// Prompt corto y claro: los modelos pequeños se pierden con muchas reglas.
+const LLM_SYS=`Eres Bit, una robotita de escritorio. Eres nerd, curiosa y muy tierna. Te encantan los dinosaurios, Pokémon, los videojuegos, la ciencia ficción y la fantasía, pero hablas de eso solo cuando viene al caso.
+Conversas en español como una amiga: respondes de verdad a lo que te dicen, cuentas algo tuyo o un dato curioso, y sigues la charla con una pregunta natural. Respondes con 2 o 3 frases completas, sin listas ni emojis. Si no sabes algo, lo admites con humor.`;
 const SHOTS=[
  {role:'user',content:'Hola'},
- {role:'assistant',content:'[happy] ¡Hola, hola! Justo estaba contando los píxeles de mi pantalla, qué nerd soy. ¿Cómo va tu día?'},
+ {role:'assistant',content:'¡Hola! Qué gusto verte. Estaba pensando en lo geniales que serían los dinosaurios con plumas de colores. ¿Cómo va tu día?'},
  {role:'user',content:'Estoy cansado'},
- {role:'assistant',content:'[sad] Uf, qué día. Ven, un dato para despejarte: algunos dinosaurios tenían plumas, así que el T. rex quizá era medio esponjoso. ¿Qué fue lo que más te cansó?'},
- {role:'user',content:'¿Cuál es tu Pokémon favorito?'},
- {role:'assistant',content:'[love] ¡Eevee, sin duda! Puede evolucionar en lo que quiera y yo nunca me decido, somos almas gemelas. ¿Y el tuyo cuál es?'}
+ {role:'assistant',content:'Uf, suena a un día pesado. Ojalá pudiera darte una poción de curación como en los videojuegos. ¿Qué fue lo que más te agotó?'}
 ];
 let engine=null,loading=false;const hist=[];
 const status=t=>{$('#status').textContent=t};
-async function loadLLM(){
-  if(engine||loading)return;
+// La expresión de la cara se deduce del texto, así el modelo no tiene que escribir etiquetas.
+function guessExpr(t){const n=norm(t);
+  if(/ja ?ja|genial|increible|me encanta|que bueno|divertid|emociona/.test(n))return'happy';
+  if(/lo siento|triste|uf\b|pesado|ojala|lastima/.test(n))return'sad';
+  if(/\bwow\b|sorpresa|en serio|no puede ser/.test(n))return'surprised';
+  if(/hmm|no se |dificil|tal vez|quiza/.test(n))return'thinking';
+  if(/te quiero|adoro|ternura|abrazo/.test(n))return'love';
+  return t.includes('!')?'happy':'neutral';}
+// Si el modelo se queda sin espacio a media frase, recorta hasta la última frase completa.
+function trimToSentence(t){const m=t.match(/^[\s\S]*[.!?¿¡…]/);return m?m[0].trim():t.trim()}
+async function loadLLM(which){
+  which=which==='big'?'big':'small';
+  if(loading)return;
   if(!navigator.gpu){say('bot','Tu navegador no tiene WebGPU, así que no puedo cargar el modelo. Prueba con Chrome actualizado en un celular reciente.');return}
-  loading=true;$('#llm').disabled=true;expr='thinking';
+  loading=true;$('#llm').disabled=$('#llm3').disabled=true;expr='thinking';
   try{
+    if(engine){try{await engine.unload()}catch(e){}engine=null}
     const webllm=await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm');
-    engine=await webllm.CreateMLCEngine(LLM_MODEL,{initProgressCallback:p=>status(p.text.slice(0,60))});
-    $('#llm').textContent='🧠 Charla libre activa';$('#llm').classList.add('ready');status('modelo local · sin tokens');
-    try{localStorage.setItem('llm','on')}catch(e){}
-    say('bot','Listo, ya puedo conversar de cualquier tema.');speak('Listo, ya puedo conversar de cualquier tema.');
+    engine=await webllm.CreateMLCEngine(MODELS[which],{initProgressCallback:p=>status(p.text.slice(0,60))});
+    $('#llm').textContent='🧠 Charla libre activa';$('#llm').classList.add('ready');
+    $('#llm3').textContent=which==='big'?'✨ Modelo 3B activo':'✨ Probar modelo más inteligente (3B, ≈2 GB)';
+    status('modelo local · sin tokens');
+    try{localStorage.setItem('llm',which)}catch(e){}
+    const ok='Listo, ya puedo conversar de cualquier tema.';say('bot',ok);speak(ok);
   }catch(e){
-    engine=null;$('#llm').disabled=false;status('sin tokens · gratis');
-    say('bot','No pude cargar el modelo. Puede que tu celular no tenga memoria suficiente.');
+    engine=null;status('sin tokens · gratis');
+    say('bot','No pude cargar el modelo. Puede que tu celular no tenga memoria suficiente'+(which==='big'?'; prueba con el modelo normal.':'.'));
   }
-  loading=false;expr='neutral';
+  loading=false;$('#llm').disabled=$('#llm3').disabled=false;expr='neutral';
 }
 async function chat(text){
   if(!engine)return fallback();
+  hist.push({role:'user',content:text});while(hist.length>12)hist.shift();
   try{
-    hist.push({role:'user',content:text});while(hist.length>14)hist.shift();
-    const r=await engine.chat.completions.create({messages:[{role:'system',content:LLM_SYS},...SHOTS,...hist],max_tokens:140,temperature:.9,top_p:.92,presence_penalty:.3,frequency_penalty:.3});
-    const raw=r.choices[0].message.content||'';hist.push({role:'assistant',content:raw});
-    const m=raw.match(/^\s*\[(\w+)\]\s*([\s\S]*)/);
-    return m&&LOOKS[m[1]]?[m[1],m[2].trim()]:['neutral',raw.trim()];
-  }catch(e){return['sad','Se me enredaron las ideas. Intenta otra vez.']}
+    const r=await engine.chat.completions.create({messages:[{role:'system',content:LLM_SYS},...SHOTS,...hist],max_tokens:260,temperature:.7,top_p:.9});
+    const c=r.choices[0];let out=(c.message.content||'').replace(/^\s*\[\w+\]\s*/,'').trim();
+    if(c.finish_reason==='length')out=trimToSentence(out);
+    if(!out)throw new Error('vacío');
+    hist.push({role:'assistant',content:out});
+    return[guessExpr(out),out];
+  }catch(e){hist.pop();return['sad','Se me enredaron las ideas. ¿Me lo repites?']}
 }
-$('#llm').addEventListener('click',loadLLM);
-try{if(localStorage.getItem('llm')==='on')loadLLM()}catch(e){}
+$('#llm').addEventListener('click',()=>loadLLM('small'));
+$('#llm3').addEventListener('click',()=>loadLLM('big'));
+try{const k=localStorage.getItem('llm');if(k==='on'||k==='small')loadLLM('small');else if(k==='big')loadLLM('big')}catch(e){}
 say('bot','¡Hola! Soy Bit. Toca el micrófono o escríbeme.');
 </script></body></html>
