@@ -145,9 +145,13 @@ function guessExpr(t){const n=norm(t);
 // Si el modelo se queda sin espacio a media frase, recorta hasta la última frase completa.
 // Detecta salida corrupta (símbolos, código, otros alfabetos mezclados) para no mostrársela al usuario.
 function isGarbage(t){
-  const letters=t.replace(/[\s\d.,;:!?¿¡'"()\-…]/g,'');if(!letters.length)return true;
-  const odd=(letters.match(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g)||[]).length;
-  return odd/letters.length>0.12;
+  if(!t.trim())return true;
+  // Alfabetos que nunca aparecen en una respuesta en español (cirílico, tailandés, CJK, hangul) o carácter de reemplazo.
+  if(/[Ѐ-ӿ฀-๿぀-ヿ一-鿿가-힯�]/.test(t))return true;
+  // Código o símbolos sueltos y palabras pegadas tipo camelCase.
+  if(/[{}<>;=]|\(\)|\w\(/.test(t))return true;
+  if((t.match(/[a-z][A-Z][a-z]/g)||[]).length>=2)return true;
+  return false;
 }
 function trimToSentence(t){const m=t.match(/^[\s\S]*[.!?¿¡…]/);return m?m[0].trim():t.trim()}
 async function loadLLM(which){
