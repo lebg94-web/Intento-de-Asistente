@@ -121,7 +121,8 @@ $('#mic').addEventListener('click',()=>{
 });
 
 /* ---- charla libre con modelo local en el navegador (WebLLM + WebGPU) ---- */
-const MODELS={small:'Qwen2.5-1.5B-Instruct-q4f16_1-MLC',big:'Qwen2.5-3B-Instruct-q4f16_1-MLC'};
+// Versiones q4f32: evitan los cálculos en 16 bits, que en muchas GPUs de celular producen texto basura.
+const MODELS={small:'Qwen2.5-1.5B-Instruct-q4f32_1-MLC',big:'Qwen2.5-3B-Instruct-q4f32_1-MLC'};
 // Prompt corto y claro: los modelos pequeños se pierden con muchas reglas.
 const LLM_SYS=`Eres Bit, una robotita de escritorio. Eres nerd, curiosa y muy tierna. Te encantan los dinosaurios, Pokémon, los videojuegos, la ciencia ficción y la fantasía, pero hablas de eso solo cuando viene al caso.
 Conversas en español como una amiga: respondes de verdad a lo que te dicen, cuentas algo tuyo o un dato curioso, y sigues la charla con una pregunta natural. Respondes con 2 o 3 frases completas, sin listas ni emojis. Si no sabes algo, lo admites con humor.`;
@@ -131,7 +132,7 @@ const SHOTS=[
  {role:'user',content:'Estoy cansado'},
  {role:'assistant',content:'Uf, suena a un día pesado. Ojalá pudiera darte una poción de curación como en los videojuegos. ¿Qué fue lo que más te agotó?'}
 ];
-let engine=null,loading=false;const hist=[];
+let engine=null,loading=false,bad=0;const hist=[];
 const status=t=>{$('#status').textContent=t};
 // La expresión de la cara se deduce del texto, así el modelo no tiene que escribir etiquetas.
 function guessExpr(t){const n=norm(t);
@@ -142,6 +143,12 @@ function guessExpr(t){const n=norm(t);
   if(/te quiero|adoro|ternura|abrazo/.test(n))return'love';
   return t.includes('!')?'happy':'neutral';}
 // Si el modelo se queda sin espacio a media frase, recorta hasta la última frase completa.
+// Detecta salida corrupta (símbolos, código, otros alfabetos mezclados) para no mostrársela al usuario.
+function isGarbage(t){
+  const letters=t.replace(/[\s\d.,;:!?¿¡'"()\-…]/g,'');if(!letters.length)return true;
+  const odd=(letters.match(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g)||[]).length;
+  return odd/letters.length>0.12;
+}
 function trimToSentence(t){const m=t.match(/^[\s\S]*[.!?¿¡…]/);return m?m[0].trim():t.trim()}
 async function loadLLM(which){
   which=which==='big'?'big':'small';
@@ -170,7 +177,8 @@ async function chat(text){
     const r=await engine.chat.completions.create({messages:[{role:'system',content:LLM_SYS},...SHOTS,...hist],max_tokens:260,temperature:.7,top_p:.9});
     const c=r.choices[0];let out=(c.message.content||'').replace(/^\s*\[\w+\]\s*/,'').trim();
     if(c.finish_reason==='length')out=trimToSentence(out);
-    if(!out)throw new Error('vacío');
+    if(!out||isGarbage(out)){hist.pop();bad++;return['sad',bad>1?'Sigo teniendo problemas para hablar bien. Prueba recargar la página y activar la charla libre otra vez.':'Uy, me salió un galimatías. ¿Me lo repites?']}
+    bad=0;
     hist.push({role:'assistant',content:out});
     return[guessExpr(out),out];
   }catch(e){hist.pop();return['sad','Se me enredaron las ideas. ¿Me lo repites?']}
