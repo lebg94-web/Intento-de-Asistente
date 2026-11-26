@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Bit Robot</title>
+<style>
+/* Layout: one-column phone app. Face on top, chat log, input bar at the bottom. */
+:root{--bg:#eef3f8;--panel:#fff;--fg:#14202e;--muted:#5b6b7d;--eye:#0e8fb3;--mouth:#d6457a;--line:#d5dee8;--screen:#0b1020}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0a0f1a;--panel:#131b2b;--fg:#e6eef8;--muted:#8ea0b5;--line:#243247;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0a0f1a;--panel:#131b2b;--fg:#e6eef8;--muted:#8ea0b5;--line:#243247;color-scheme:dark}
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font:16px/1.4 Inter,system-ui,sans-serif;display:flex;flex-direction:column;gap:12px;
+ padding-block:12px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1{font:600 1.1rem/1 "Space Grotesk",Inter,sans-serif;margin:0;display:flex;justify-content:space-between;align-items:baseline}
+h1 small{font:400 .8rem Inter,sans-serif;color:var(--muted)}
+#screen{background:var(--screen);border-radius:20px;width:100%;max-width:520px;align-self:center;aspect-ratio:3/2;display:block}
+#log{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:8px;max-width:520px;width:100%;align-self:center}
+.m{padding:8px 12px;border-radius:14px;max-width:85%;background:var(--panel);border:1px solid var(--line);overflow-wrap:anywhere}
+.m.me{align-self:flex-end;background:var(--eye);color:#fff;border-color:transparent}
+.chips{display:flex;gap:6px;flex-wrap:wrap;max-width:520px;width:100%;align-self:center}
+.chips button{font:inherit;font-size:.85rem;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
+form{display:flex;gap:8px;max-width:520px;width:100%;align-self:center}
+input{flex:1;min-width:0;font:inherit;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
+#mic{background:var(--eye)!important;padding:0 14px!important}
+#mic.on{background:var(--mouth)!important}
+form button{font:inherit;font-weight:600;padding:0 18px;border-radius:12px;border:0;background:var(--mouth);color:#fff}
+button:focus-visible,input:focus-visible{outline:2px solid var(--eye);outline-offset:2px}
+</style></head><body>
+<h1>Bit <small id="status">sin tokens · gratis</small></h1>
+<canvas id="screen" width="480" height="320"></canvas>
+<div id="log" aria-live="polite"></div>
+<div class="chips" id="chips"></div>
+<form id="f"><button type="button" id="mic" aria-label="Hablar">🎤</button><input id="q" autocomplete="off" placeholder="Háblale a Bit…" enterkeyhint="send"><button>Enviar</button></form>
+<script>
+const $=s=>document.querySelector(s);
+const cv=$('#screen'),ctx=cv.getContext('2d');
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const LOOKS={neutral:[1,.2,0],happy:[.8,1,-4],sad:[.8,-.8,12],surprised:[1.3,0,-8],thinking:[.7,0,6],sleepy:[.3,0,0],angry:[.7,-.5,16],love:[1,1,0],listening:[1.15,.1,-3]};
+let expr='neutral',speaking=false,curH=1,curM=.2,blinkAt=performance.now()+2000,gaze=[0,0],gazeAt=0;
+function draw(now){
+  const [eh,m,brow]=LOOKS[expr];curH+=(eh-curH)*.25;curM+=(m-curM)*.25;
+  if(now>blinkAt+150)blinkAt=now+2000+Math.random()*3000;
+  const blink=now>=blinkAt&&now<blinkAt+150;
+  if(now>gazeAt){gaze=[Math.random()*2-1,Math.random()*1.2-.6];gazeAt=now+1000+Math.random()*2000}
+  ctx.clearRect(0,0,480,320);
+  for(const cx of [150,330]){
+    const h=70*curH*(blink?.08:1),cy=120;
+    ctx.fillStyle='#7fe7ff';ctx.beginPath();ctx.ellipse(cx,cy,45,Math.max(h,3),0,0,7);ctx.fill();
+    if(!blink&&expr!=='sleepy'){ctx.fillStyle='#0b1020';ctx.beginPath();ctx.arc(cx+gaze[0]*14,cy+gaze[1]*14,14,0,7);ctx.fill()}
+    const s=cx<240?-1:1;ctx.strokeStyle='#7fe7ff';ctx.lineWidth=6;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(cx-45,50-brow*s);ctx.lineTo(cx+45,50+brow*s);ctx.stroke();
+  }
+  ctx.fillStyle=ctx.strokeStyle='#ff8fb1';
+  if(speaking){const o=8+14*Math.abs(Math.sin(now/1000*14));ctx.beginPath();ctx.ellipse(240,240,30,o,0,0,7);ctx.fill()}
+  else{ctx.lineWidth=8;ctx.beginPath();ctx.moveTo(195,240);ctx.quadraticCurveTo(240,240+curM*50,285,240);ctx.stroke()}
+  if(expr==='love'){ctx.font='28px sans-serif';ctx.textAlign='center';ctx.fillText('♥',240,50)}
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+/* ---- voz de salida (si el navegador la permite) ---- */
+function speak(t){
+  speaking=true;let done=false;const end=()=>{if(!done){done=true;speaking=false}};
+  try{const u=new SpeechSynthesisUtterance(t);u.lang='es-MX';u.onend=end;u.onerror=end;speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}
+  setTimeout(end,Math.min(9000,600+t.length*70));
+}
+function say(role,t){const d=document.createElement('div');d.className='m '+role;d.textContent=t;$('#log').append(d);d.scrollIntoView({block:'end'})}
+
+/* ---- reglas locales (mismas ideas que intents.py) ---- */
+const norm=s=>s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[.!?¿¡,]/g,'').trim();
+const NUMS={un:1,una:1,uno:1,dos:2,tres:3,cuatro:4,cinco:5,seis:6,siete:7,ocho:8,nueve:9,diez:10,quince:15,veinte:20,treinta:30};
+const UNITS={segundo:1,minuto:60,hora:3600};
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+const DIAS=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+const MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+function handle(text){
+  const t=norm(text);let m;
+  if(m=t.match(new RegExp('(?:temporizador|alarma|avisame|recuerdame).*?(\\d+|'+Object.keys(NUMS).join('|')+')\\s+(segundos?|minutos?|horas?)'))){
+    const n=/^\d+$/.test(m[1])?+m[1]:NUMS[m[1]],u=m[2].replace(/s$/,'');
+    setTimeout(()=>{expr='surprised';const r=`¡Tiempo! Terminó el temporizador de ${n} ${m[2]}.`;say('bot',r);speak(r);if(navigator.vibrate)navigator.vibrate([200,100,200])},n*UNITS[u]*1000);
+    return['happy',`Listo, te aviso en ${n} ${m[2]}.`];
+  }
+  if(/\bque (hora|dia)\b|\bhora es\b|\bfecha\b/.test(t)){const d=new Date();
+    return['neutral',`${DIAS[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()}, ${d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})}`]}
+  if(m=t.match(/(?:clima|temperatura|tiempo) (?:en|de)\s+(.+)/))return weather(m[1]);
+  if(/\b(hola|buenas|hey)\b/.test(t))return['happy',pick(['¡Hola! Aquí estoy.','¡Hey! Qué bueno verte.','¡Hola! ¿Qué hacemos?'])];
+  if(/\bgracias\b/.test(t))return['love',pick(['¡De nada!','Para eso estoy.','Con gusto.'])];
+  if(/como te llamas|quien eres/.test(t))return['happy','Soy Bit, tu robotito de escritorio.'];
+  if(/chiste/.test(t))return['happy','¿Qué le dice un bit a otro? Nos vemos en el bus.'];
+  return pick([['thinking','Eso no lo sé sin un modelo de lenguaje. Prueba con la hora o un temporizador.'],['sad','No te entendí. Prueba: "ponme un temporizador de 10 segundos".']]);
+}
+const WMO={0:'despejado',1:'mayormente despejado',2:'parcialmente nublado',3:'nublado',45:'niebla',48:'niebla',51:'llovizna',61:'lluvia ligera',63:'lluvia',65:'lluvia fuerte',71:'nieve ligera',73:'nieve',80:'chubascos',95:'tormenta'};
+async function weather(city){
+  try{
+    const g=(await (await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&language=es&name='+encodeURIComponent(city))).json()).results?.[0];
+    if(!g)return['sad','No encontré la ciudad '+city+'.'];
+    const w=(await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${g.latitude}&longitude=${g.longitude}&current_weather=true`)).json()).current_weather;
+    return['happy',`${g.name}: ${w.temperature} grados, ${WMO[w.weathercode]||'clima variable'}, viento ${w.windspeed} kilómetros por hora.`];
+  }catch(e){return['sad','No pude consultar el clima. ¿Tienes internet?']}
+}
+function send(text){
+  say('me',text);expr='thinking';
+  setTimeout(async()=>{let res=await handle(text);let[e,r]=res;expr=e;say('bot',r);speak(r);setTimeout(()=>{if(!speaking)expr='neutral'},4000)},400);
+}
+$('#f').addEventListener('submit',e=>{e.preventDefault();const v=$('#q').value.trim();if(v){$('#q').value='';send(v)}});
+for(const c of ['Hola','¿Qué hora es?','Temporizador de 10 segundos','Cuéntame un chiste','Gracias']){
+  const b=document.createElement('button');b.type='button';b.textContent=c;b.onclick=()=>send(c);$('#chips').append(b)}
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null;
+$('#mic').addEventListener('click',()=>{
+  if(!SR){say('bot','Tu navegador no permite voz. Prueba con Chrome, o escríbeme.');return}
+  if(rec){rec.stop();return}
+  rec=new SR();rec.lang='es-MX';rec.interimResults=false;
+  rec.onstart=()=>{$('#mic').classList.add('on');expr='listening'};
+  rec.onresult=e=>send(e.results[0][0].transcript);
+  rec.onerror=e=>{say('bot',e.error==='not-allowed'?'Necesito permiso para usar el micrófono.':'No te escuché bien.')};
+  rec.onend=()=>{rec=null;$('#mic').classList.remove('on');if(expr==='listening')expr='neutral'};
+  rec.start();
+});
+say('bot','¡Hola! Soy Bit. Toca el micrófono o escríbeme.');
+</script></body></html>
