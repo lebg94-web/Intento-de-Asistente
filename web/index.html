@@ -30,11 +30,13 @@ h1 small{font:400 .8rem Inter,sans-serif;color:var(--muted)}
 .chips button{font:inherit;font-size:.85rem;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
 form{display:flex;gap:8px;max-width:520px;width:100%;align-self:center}
 input{flex:1;min-width:0;font:inherit;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
+[hidden]{display:none!important}
+#pstat{font-size:.8rem;min-height:1.1em}
 #vbox{max-width:520px;width:100%;align-self:center;font-size:.9rem;color:var(--muted)}
 #vbox summary{cursor:pointer;padding:4px 0}
 .vrow{display:flex;gap:10px;align-items:center;margin:6px 0}
 .vrow input[type=range]{flex:1;padding:0;border:0;background:none}
-#vtest{font:inherit;font-size:.85rem;padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
+#vtest,#pload{font:inherit;font-size:.85rem;padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
 select{flex:1;min-width:0;font:inherit;padding:10px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
 #load{border-radius:12px!important;font-weight:600;background:var(--eye)!important;color:#fff;border:0!important;padding:0 16px!important}
 #load.ready{background:var(--mouth)!important}
@@ -49,9 +51,11 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--eye);outline-of
 <div class="chips" id="chips"></div>
 <div class="chips" style="flex-wrap:nowrap"><select id="model" aria-label="Modelo de charla libre"></select><button type="button" id="load">Cargar</button></div>
 <details id="vbox"><summary>🔊 Voz de Bit</summary>
-<div class="vrow"><select id="voice" aria-label="Voz"></select></div>
+<div class="vrow"><select id="engine" aria-label="Tipo de voz"><option value="sys">Voz del sistema (instantánea)</option><option value="piper">Voz Piper (más natural, descarga ≈130 MB)</option></select></div>
+<div id="prow" hidden><div class="vrow"><select id="pvoice" aria-label="Voz Piper"></select><button type="button" id="pload">Descargar y activar</button></div><div id="pstat"></div></div>
+<div class="vrow" id="sysrow"><select id="voice" aria-label="Voz del sistema"></select></div>
 <label class="vrow">Velocidad <input type="range" id="vrate" min="0.7" max="1.3" step="0.05" value="1"></label>
-<label class="vrow">Tono <input type="range" id="vpitch" min="0.7" max="1.5" step="0.05" value="1"></label>
+<label class="vrow" id="pitchrow">Tono <input type="range" id="vpitch" min="0.7" max="1.5" step="0.05" value="1"></label>
 <button type="button" id="vtest">Probar voz</button></details>
 <form id="f"><button type="button" id="mic" aria-label="Hablar">🎤</button><input id="q" autocomplete="off" placeholder="Háblale a Bit…" enterkeyhint="send"><button>Enviar</button></form>
 <script>
@@ -100,17 +104,19 @@ function loadVoices(){
     if(!VOICES.some(v=>v.voiceURI===vURI))vURI=VOICES[0].voiceURI;sel.value=vURI;
   }catch(e){}
 }
-function speak(t){
+function speakSys(t){
   speaking=true;let done=false;const end=()=>{if(!done){done=true;speaking=false}};
   try{const u=mkUtt(t);u.onend=end;u.onerror=end;speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}
   setTimeout(end,Math.min(9000,600+t.length*70));
 }
+function speak(t){if(usePiper&&piperReady){stopPiper();piperQ(t)}else speakSys(t)}
 function say(role,t){const d=document.createElement('div');d.className='m '+role;d.textContent=t;$('#log').append(d);d.scrollIntoView({block:'end'})}
 
 /* ---- voz por frases: empieza a hablar en cuanto hay una frase completa ---- */
 let qn=0,spoken=0;
 function speakQ(t){
-  t=t.trim();if(!t)return;speaking=true;qn++;let d=false;
+  t=t.trim();if(!t)return;if(usePiper&&piperReady){piperQ(t);return}
+  speaking=true;qn++;let d=false;
   const done=()=>{if(d)return;d=true;if(--qn<=0){qn=0;speaking=false}};
   try{const u=mkUtt(t);u.onend=done;u.onerror=done;speechSynthesis.speak(u)}catch(e){done()}
   setTimeout(done,Math.min(20000,2000+t.length*110));
@@ -272,7 +278,7 @@ async function chat(text){
   hist.push({role:'user',content:text});while(hist.length>12)hist.shift();
   const msgs=gen.lite?[{role:'system',content:sysLite()},...hist.slice(-8)]:[{role:'system',content:LLM_SYS},...SHOTS,...hist];
   const el=document.createElement('div');el.className='m bot';el.textContent='…';$('#log').append(el);el.scrollIntoView({block:'end'});
-  try{speechSynthesis.cancel()}catch(e){}qn=0;spoken=0;
+  try{speechSynthesis.cancel()}catch(e){}stopPiper();qn=0;spoken=0;
   const t0=Date.now();let last=t0,first=0,ntok=0,stallReject;
   const stall=new Promise((_,rej)=>stallReject=rej);
   const tick=setInterval(()=>{
@@ -292,6 +298,61 @@ async function chat(text){
 }
 $('#load').addEventListener('click',()=>loadLLM($('#model').value));
 try{const k=localStorage.getItem('llm3');if(k&&MODES[k])loadLLM(k)}catch(e){}
+
+/* ---- Voz Piper (neuronal, corre en tu celular) ---- */
+const PVOICES={
+  'es_MX-claude-high':{path:'es/es_MX/claude/high/es_MX-claude-high.onnx',name:'México · Claude · alta calidad (≈110 MB)',size:114e6},
+  'es_MX-ald-medium':{path:'es/es_MX/ald/medium/es_MX-ald-medium.onnx',name:'México · Ald · media (≈60 MB)',size:63e6},
+  'es_ES-davefx-medium':{path:'es/es_ES/davefx/medium/es_ES-davefx-medium.onnx',name:'España · Davefx · media (≈60 MB)',size:63e6},
+  'es_ES-sharvard-medium':{path:'es/es_ES/sharvard/medium/es_ES-sharvard-medium.onnx',name:'España · Sharvard · media (≈60 MB)',size:77e6}
+};
+let usePiper=false,piperReady=false,pw=null,pid=0,pgen=0,actx=null,playAt=0,ptail=Promise.resolve();
+const pend=new Map(),psrc=new Set();
+for(const[k,v]of Object.entries(PVOICES)){const o=document.createElement('option');o.value=k;o.textContent=v.name;$('#pvoice').append(o)}
+const pstat=t=>{$('#pstat').textContent=t};
+function piperWorker(){
+  if(pw)return pw;
+  pw=new Worker('tts-worker.js');
+  pw.onmessage=e=>{
+    const m=e.data;
+    if(m.type==='progress'){pstat(m.tag==='motor'?'Iniciando el motor de voz…':'Descargando voz… '+(m.total?Math.round(m.loaded/m.total*100)+'%':Math.round(m.loaded/1e6)+' MB'))}
+    else if(m.type==='ready'){const r=pend.get('load');r&&r.res()}
+    else if(m.type==='audio'||m.type==='error'){const r=pend.get(m.id!==undefined?m.id:'load');if(r){pend.delete(m.id);m.type==='error'?r.rej(new Error(m.message)):r.res(m)}else if(m.type==='error'){const l=pend.get('load');l&&l.rej(new Error(m.message))}}
+  };
+  pw.onerror=e=>{const l=pend.get('load');l&&l.rej(new Error(e.message||'error del motor de voz'))};
+  return pw;
+}
+function loadPiper(){
+  const id=$('#pvoice').value,v=PVOICES[id];
+  $('#pload').disabled=true;pstat('Preparando…');piperReady=false;
+  return new Promise((res,rej)=>{pend.set('load',{res,rej});piperWorker().postMessage({type:'load',path:v.path,size:v.size})})
+  .then(()=>{pend.delete('load');piperReady=true;usePiper=true;pstat('✔ Voz Piper activa');$('#pload').textContent='Activa';
+    try{localStorage.setItem('bitpiper',id)}catch(e){}
+    try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();actx.resume()}catch(e){}})
+  .catch(e=>{pend.delete('load');usePiper=false;pstat('No se pudo cargar: '+String(e.message).slice(0,140)+'. Uso la voz del sistema.');$('#pload').textContent='Reintentar'})
+  .finally(()=>{$('#pload').disabled=false});
+}
+function stopPiper(){pgen++;ptail=Promise.resolve();for(const s of psrc){try{s.stop()}catch(e){}}psrc.clear();playAt=0}
+function piperQ(text){
+  const g=pgen;speaking=true;
+  ptail=ptail.then(async()=>{
+    if(g!==pgen)return;
+    const id=++pid;
+    const m=await new Promise((res,rej)=>{pend.set(id,{res,rej});pw.postMessage({type:'synth',id,text,speed:vRate})});
+    if(g!==pgen)return;
+    actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state==='suspended')await actx.resume();
+    const buf=actx.createBuffer(1,m.samples.length,m.rate);buf.copyToChannel(m.samples,0);
+    const src=actx.createBufferSource();src.buffer=buf;src.connect(actx.destination);
+    const t=Math.max(actx.currentTime+.03,playAt);src.start(t);playAt=t+buf.duration;psrc.add(src);
+    src.onended=()=>{psrc.delete(src);if(!psrc.size&&actx.currentTime>=playAt-.05)speaking=false};
+  }).catch(e=>{console.error(e);speakSys(text);if(!psrc.size)speaking=false});
+}
+$('#engine').addEventListener('change',e=>{
+  const p=e.target.value==='piper';$('#prow').hidden=!p;$('#sysrow').hidden=p;$('#pitchrow').hidden=p;
+  if(!p){usePiper=false;stopPiper();try{localStorage.removeItem('bitpiper')}catch(e){}}else if(piperReady)usePiper=true;
+});
+$('#pload').addEventListener('click',loadPiper);
+try{const k=localStorage.getItem('bitpiper');if(k&&PVOICES[k]){$('#engine').value='piper';$('#prow').hidden=false;$('#sysrow').hidden=true;$('#pitchrow').hidden=true;$('#pvoice').value=k;setTimeout(loadPiper,1500)}}catch(e){}
 try{speechSynthesis.onvoiceschanged=loadVoices}catch(e){}
 loadVoices();$('#vrate').value=vRate;$('#vpitch').value=vPitch;
 $('#voice').addEventListener('change',e=>{vURI=e.target.value;saveVoice()});
