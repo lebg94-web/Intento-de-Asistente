@@ -166,10 +166,9 @@ function isGarbage(t){
 function trimToSentence(t){const m=t.match(/^[\s\S]*[.!?¿¡…]/);return m?m[0].trim():t.trim()}
 // CPU = no usa la GPU (más lento pero compatible). GPU = rápido, pero falla en algunos celulares.
 const MODES={
-  gemma1:{kind:'cpu',name:'Gemma 3 1B · CPU · ≈0.8 GB (buen español)',repo:'unsloth/gemma-3-1b-it-GGUF',file:'gemma-3-1b-it-Q4_K_M.gguf'},
+  qwen15:{kind:'cpu',name:'Qwen 2.5 1.5B · CPU · ≈1.1 GB (recomendado)',repo:'Qwen/Qwen2.5-1.5B-Instruct-GGUF',file:'qwen2.5-1.5b-instruct-q4_k_m.gguf'},
   llama1:{kind:'cpu',name:'Llama 3.2 1B · CPU · ≈0.8 GB',repo:'bartowski/Llama-3.2-1B-Instruct-GGUF',file:'Llama-3.2-1B-Instruct-Q4_K_M.gguf'},
   qwen05:{kind:'cpu',name:'Qwen 2.5 0.5B · CPU · ≈0.4 GB (el más ligero)',repo:'Qwen/Qwen2.5-0.5B-Instruct-GGUF',file:'qwen2.5-0.5b-instruct-q4_k_m.gguf'},
-  qwen15:{kind:'cpu',name:'Qwen 2.5 1.5B · CPU · ≈1.1 GB',repo:'Qwen/Qwen2.5-1.5B-Instruct-GGUF',file:'qwen2.5-1.5b-instruct-q4_k_m.gguf'},
   qwen3:{kind:'cpu',name:'Qwen 2.5 3B · CPU · ≈2 GB (lento)',repo:'Qwen/Qwen2.5-3B-Instruct-GGUF',file:'qwen2.5-3b-instruct-q4_k_m.gguf'},
   gpu:{kind:'gpu',name:'Qwen 2.5 1.5B · GPU · experimental',id:'Qwen2.5-1.5B-Instruct-q4f32_1-MLC'}
 };
@@ -189,7 +188,7 @@ async function loadLLM(mode){
       await w.loadModelFromHF({repo:M.repo,file:M.file},{n_ctx:2048,n_gpu_layers:0,
         progressCallback:({loaded,total})=>status('Descargando '+Math.round(loaded/total*100)+'%')});
       gen=async(msgs,onTok)=>{
-        const it=await w.createChatCompletion({messages:msgs,max_tokens:110,temperature:.7,top_p:.9,top_k:40,stream:true});
+        const it=await w.createChatCompletion({messages:msgs,max_tokens:110,temperature:.55,top_p:.9,top_k:30,penalty_repeat:1.1,stream:true});
         let text='',fin='',n=0;
         for await(const ch of it){const d=ch.choices&&ch.choices[0];if(!d)continue;const t=d.delta&&d.delta.content;
           if(t){text+=t;n++;onTok&&onTok(text,n)}if(d.finish_reason)fin=d.finish_reason}
