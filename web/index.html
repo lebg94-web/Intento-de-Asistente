@@ -1,6 +1,17 @@
 <!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Bit Robot</title>
+<script>
+/* Activa varios hilos de CPU (ver coi-sw.js). La primera visita recarga la página una vez. */
+try{
+  if('serviceWorker' in navigator&&!window.crossOriginIsolated&&location.protocol!=='file:'){
+    navigator.serviceWorker.register('coi-sw.js').then(reg=>{
+      if(reg.active&&!navigator.serviceWorker.controller&&!sessionStorage.getItem('coi')){sessionStorage.setItem('coi','1');location.reload()}
+      reg.addEventListener('updatefound',()=>{if(!sessionStorage.getItem('coi')){sessionStorage.setItem('coi','1');location.reload()}});
+    }).catch(()=>{});
+  }
+}catch(e){}
+</script>
 <style>
 /* Layout: one-column phone app. Face on top, chat log, input bar at the bottom. */
 :root{--bg:#eef3f8;--panel:#fff;--fg:#14202e;--muted:#5b6b7d;--eye:#0e8fb3;--mouth:#d6457a;--line:#d5dee8;--screen:#0b1020}
@@ -103,7 +114,7 @@ async function weather(city){
 }
 function send(text){
   say('me',text);expr='thinking';
-  setTimeout(async()=>{let res=await handle(text);if(!res)res=await chat(text);let[e,r]=res;expr=e;say('bot',r);speak(r);setTimeout(()=>{if(!speaking)expr='neutral'},4000)},400);
+  setTimeout(async()=>{let res=await handle(text);if(!res)res=await chat(text);let[e,r,shown]=res;expr=e;if(!shown)say('bot',r);speak(r);setTimeout(()=>{if(!speaking)expr='neutral'},4000)},400);
 }
 $('#f').addEventListener('submit',e=>{e.preventDefault();const v=$('#q').value.trim();if(v){$('#q').value='';send(v)}});
 for(const c of ['Hola','¿Qué hora es?','Temporizador de 10 segundos','Cuéntame un chiste','Gracias']){
@@ -124,6 +135,7 @@ $('#mic').addEventListener('click',()=>{
 // Prompt corto y claro: los modelos pequeños se pierden con muchas reglas.
 const LLM_SYS=`Eres Bit, una robotita de escritorio. Eres nerd, curiosa y muy tierna. Te encantan los dinosaurios, Pokémon, los videojuegos, la ciencia ficción y la fantasía, pero hablas de eso solo cuando viene al caso.
 Conversas en español como una amiga: respondes de verdad a lo que te dicen, cuentas algo tuyo o un dato curioso, y sigues la charla con una pregunta natural. Respondes con 2 o 3 frases completas, sin listas ni emojis. Si no sabes algo, lo admites con humor.`;
+const LLM_SYS_LITE='Eres Bit, una robotita de escritorio nerd y tierna. Te gustan los dinosaurios, Pokémon, los videojuegos y la ciencia ficción. Hablas en español, como una amiga, en 1 o 2 frases cortas, y sigues la charla con una pregunta.';
 const SHOTS=[
  {role:'user',content:'Hola'},
  {role:'assistant',content:'¡Hola! Qué gusto verte. Estaba pensando en lo geniales que serían los dinosaurios con plumas de colores. ¿Cómo va tu día?'},
@@ -176,18 +188,23 @@ async function loadLLM(mode){
       const w=new Wllama(wasm);
       await w.loadModelFromHF({repo:M.repo,file:M.file},{n_ctx:2048,n_gpu_layers:0,
         progressCallback:({loaded,total})=>status('Descargando '+Math.round(loaded/total*100)+'%')});
-      gen=async msgs=>{const r=await w.createChatCompletion({messages:msgs,max_tokens:200,temperature:.7,top_p:.9,top_k:40});
-        const c=r.choices[0];return{text:c.message.content||'',truncated:c.finish_reason==='length'}};
+      gen=async(msgs,onTok)=>{
+        const it=await w.createChatCompletion({messages:msgs,max_tokens:110,temperature:.7,top_p:.9,top_k:40,stream:true});
+        let text='',fin='',n=0;
+        for await(const ch of it){const d=ch.choices&&ch.choices[0];if(!d)continue;const t=d.delta&&d.delta.content;
+          if(t){text+=t;n++;onTok&&onTok(text,n)}if(d.finish_reason)fin=d.finish_reason}
+        return{text,truncated:fin==='length'}};
+      gen.lite=true;gen.info=(w.isMultithread()?w.getNumThreads()+' hilos':'1 hilo');
       unload=()=>w.exit();
     }else{
       const webllm=await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm');
       const e=await webllm.CreateMLCEngine(M.id,{initProgressCallback:p=>status(p.text.slice(0,60))});
-      gen=async msgs=>{const r=await e.chat.completions.create({messages:msgs,max_tokens:260,temperature:.7,top_p:.9});
+      gen=async(msgs,onTok)=>{const r=await e.chat.completions.create({messages:msgs,max_tokens:260,temperature:.7,top_p:.9});
         const c=r.choices[0];return{text:c.message.content||'',truncated:c.finish_reason==='length'}};
       unload=()=>e.unload();
     }
     engine=true;bad=0;
-    $('#model').value=mode;$('#load').textContent='Activo';$('#load').classList.add('ready');status('modelo local · sin tokens');
+    $('#model').value=mode;$('#load').textContent='Activo';$('#load').classList.add('ready');status('modelo local · '+(gen.info||'GPU'));
     try{localStorage.setItem('llm3',mode)}catch(e){}
     const ok='Listo, ya puedo conversar. Modelo cargado en '+Math.round((Date.now()-t0)/1000)+' segundos.';say('bot',ok);speak(ok);
   }catch(e){
@@ -199,15 +216,24 @@ async function loadLLM(mode){
 async function chat(text){
   if(!engine||!gen)return fallback();
   hist.push({role:'user',content:text});while(hist.length>12)hist.shift();
+  const msgs=gen.lite?[{role:'system',content:LLM_SYS_LITE},...hist.slice(-6)]:[{role:'system',content:LLM_SYS},...SHOTS,...hist];
+  const el=document.createElement('div');el.className='m bot';el.textContent='…';$('#log').append(el);el.scrollIntoView({block:'end'});
+  const t0=Date.now();let last=t0,first=0,ntok=0,stallReject;
+  const stall=new Promise((_,rej)=>stallReject=rej);
+  const tick=setInterval(()=>{
+    const now=Date.now();
+    status(ntok?ntok+' tokens · '+(ntok/Math.max(.5,(now-first)/1000)).toFixed(1)+' por segundo':'procesando el mensaje… '+Math.round((now-t0)/1000)+' s');
+    if(now-last>90000)stallReject(new Error('sin avance en 90 segundos'));
+  },1000);
   try{
-    const t0=Date.now();const tick=setInterval(()=>status('pensando… '+Math.round((Date.now()-t0)/1000)+' s'),1000);
-    let r;try{r=await Promise.race([gen([{role:'system',content:LLM_SYS},...SHOTS,...hist]),new Promise((_,rej)=>setTimeout(()=>rej(new Error('tardó más de 2 minutos')),120000))])}finally{clearInterval(tick);status('respondió en '+Math.round((Date.now()-t0)/1000)+' s')}
+    const r=await Promise.race([gen(msgs,(t,n)=>{if(!first)first=Date.now();last=Date.now();ntok=n;el.textContent=t;el.scrollIntoView({block:'end'})}),stall]);
+    clearInterval(tick);status('respondió en '+Math.round((Date.now()-t0)/1000)+' s · '+(gen.info||'GPU'));
     let out=r.text.replace(/^\s*\[\w+\]\s*/,'').trim();
     if(r.truncated)out=trimToSentence(out);
-    if(!out||isGarbage(out)){hist.pop();bad++;return['sad',bad>1?'Sigo teniendo problemas para hablar bien. Prueba otro modo de charla libre, o recarga la página.':'Uy, me salió un galimatías. ¿Me lo repites?']}
-    bad=0;hist.push({role:'assistant',content:out});
-    return[guessExpr(out),out];
-  }catch(e){hist.pop();console.error(e);return['sad','Se me enredaron las ideas ('+String(e&&e.message||e).slice(0,100)+').']}
+    if(!out||isGarbage(out)){el.remove();hist.pop();bad++;return['sad',bad>1?'Sigo teniendo problemas para hablar bien. Prueba otro modelo, o recarga la página.':'Uy, me salió un galimatías. ¿Me lo repites?']}
+    bad=0;hist.push({role:'assistant',content:out});el.textContent=out;
+    return[guessExpr(out),out,true];
+  }catch(e){clearInterval(tick);el.remove();hist.pop();console.error(e);return['sad','Se me enredaron las ideas ('+String(e&&e.message||e).slice(0,100)+').']}
 }
 $('#load').addEventListener('click',()=>loadLLM($('#model').value));
 try{const k=localStorage.getItem('llm3');if(k&&MODES[k])loadLLM(k)}catch(e){}
