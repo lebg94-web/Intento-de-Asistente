@@ -79,6 +79,25 @@ function speak(t){
 }
 function say(role,t){const d=document.createElement('div');d.className='m '+role;d.textContent=t;$('#log').append(d);d.scrollIntoView({block:'end'})}
 
+/* ---- voz por frases: empieza a hablar en cuanto hay una frase completa ---- */
+let qn=0,spoken=0;
+function speakQ(t){
+  t=t.trim();if(!t)return;speaking=true;qn++;let d=false;
+  const done=()=>{if(d)return;d=true;if(--qn<=0){qn=0;speaking=false}};
+  try{const u=new SpeechSynthesisUtterance(t);u.lang='es-MX';u.onend=done;u.onerror=done;speechSynthesis.speak(u)}catch(e){done()}
+  setTimeout(done,Math.min(20000,2000+t.length*110));
+}
+function flushSpeech(t,final){
+  let rest=t.slice(spoken);
+  for(;;){
+    const m=rest.slice(11).match(/[.!?…]+\s/);   // una frase muy corta se junta con la siguiente
+    if(!m)break;
+    const cut=11+m.index+m[0].length,sent=rest.slice(0,cut);
+    if(!isGarbage(sent))speakQ(sent);
+    spoken+=cut;rest=t.slice(spoken);
+  }
+  if(final&&rest.trim()&&!isGarbage(rest)){speakQ(rest);spoken=t.length}
+}
 /* ---- reglas locales (mismas ideas que intents.py) ---- */
 const norm=s=>s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[.!?¿¡,]/g,'').trim();
 const NUMS={un:1,una:1,uno:1,dos:2,tres:3,cuatro:4,cinco:5,seis:6,siete:7,ocho:8,nueve:9,diez:10,quince:15,veinte:20,treinta:30};
@@ -114,7 +133,7 @@ async function weather(city){
 }
 function send(text){
   say('me',text);expr='thinking';
-  setTimeout(async()=>{let res=await handle(text);if(!res)res=await chat(text);let[e,r,shown]=res;expr=e;if(!shown)say('bot',r);speak(r);setTimeout(()=>{if(!speaking)expr='neutral'},4000)},400);
+  setTimeout(async()=>{let res=await handle(text);if(!res)res=await chat(text);let[e,r,shown]=res;expr=e;if(!shown){say('bot',r);speak(r)}setTimeout(()=>{if(!speaking)expr='neutral'},4000)},400);
 }
 $('#f').addEventListener('submit',e=>{e.preventDefault();const v=$('#q').value.trim();if(v){$('#q').value='';send(v)}});
 for(const c of ['Hola','¿Qué hora es?','Temporizador de 10 segundos','Cuéntame un chiste','Gracias']){
@@ -135,7 +154,7 @@ $('#mic').addEventListener('click',()=>{
 // Prompt corto y claro: los modelos pequeños se pierden con muchas reglas.
 const LLM_SYS=`Eres Bit, una robotita de escritorio. Eres nerd, curiosa y muy tierna. Te encantan los dinosaurios, Pokémon, los videojuegos, la ciencia ficción y la fantasía, pero hablas de eso solo cuando viene al caso.
 Conversas en español como una amiga: respondes de verdad a lo que te dicen, cuentas algo tuyo o un dato curioso, y sigues la charla con una pregunta natural. Respondes con 2 o 3 frases completas, sin listas ni emojis. Si no sabes algo, lo admites con humor.`;
-const LLM_SYS_LITE='Eres Bit, una robotita de escritorio nerd y tierna. Te gustan los dinosaurios, Pokémon, los videojuegos y la ciencia ficción. Hablas en español, como una amiga, en 1 o 2 frases cortas, y sigues la charla con una pregunta.';
+const LLM_SYS_LITE='Eres Bit, una robotita de escritorio nerd y tierna. Te gustan los dinosaurios, Pokémon, los videojuegos y la ciencia ficción. Hablas en español, como una amiga. Responde con máximo 2 frases cortas (unas 25 palabras) y termina con una pregunta breve.';
 const SHOTS=[
  {role:'user',content:'Hola'},
  {role:'assistant',content:'¡Hola! Qué gusto verte. Estaba pensando en lo geniales que serían los dinosaurios con plumas de colores. ¿Cómo va tu día?'},
@@ -188,7 +207,7 @@ async function loadLLM(mode){
       await w.loadModelFromHF({repo:M.repo,file:M.file},{n_ctx:2048,n_gpu_layers:0,
         progressCallback:({loaded,total})=>status('Descargando '+Math.round(loaded/total*100)+'%')});
       gen=async(msgs,onTok)=>{
-        const it=await w.createChatCompletion({messages:msgs,max_tokens:110,temperature:.55,top_p:.9,top_k:30,penalty_repeat:1.1,stream:true});
+        const it=await w.createChatCompletion({messages:msgs,max_tokens:80,temperature:.55,top_p:.9,top_k:30,penalty_repeat:1.1,stream:true});
         let text='',fin='',n=0;
         for await(const ch of it){const d=ch.choices&&ch.choices[0];if(!d)continue;const t=d.delta&&d.delta.content;
           if(t){text+=t;n++;onTok&&onTok(text,n)}if(d.finish_reason)fin=d.finish_reason}
@@ -217,6 +236,7 @@ async function chat(text){
   hist.push({role:'user',content:text});while(hist.length>12)hist.shift();
   const msgs=gen.lite?[{role:'system',content:LLM_SYS_LITE},...hist.slice(-6)]:[{role:'system',content:LLM_SYS},...SHOTS,...hist];
   const el=document.createElement('div');el.className='m bot';el.textContent='…';$('#log').append(el);el.scrollIntoView({block:'end'});
+  try{speechSynthesis.cancel()}catch(e){}qn=0;spoken=0;
   const t0=Date.now();let last=t0,first=0,ntok=0,stallReject;
   const stall=new Promise((_,rej)=>stallReject=rej);
   const tick=setInterval(()=>{
@@ -225,12 +245,12 @@ async function chat(text){
     if(now-last>90000)stallReject(new Error('sin avance en 90 segundos'));
   },1000);
   try{
-    const r=await Promise.race([gen(msgs,(t,n)=>{if(!first)first=Date.now();last=Date.now();ntok=n;el.textContent=t;el.scrollIntoView({block:'end'})}),stall]);
+    const r=await Promise.race([gen(msgs,(t,n)=>{if(!first)first=Date.now();last=Date.now();ntok=n;el.textContent=t;el.scrollIntoView({block:'end'});flushSpeech(t.replace(/^\s*\[\w+\]\s*/,''),false)}),stall]);
     clearInterval(tick);status('respondió en '+Math.round((Date.now()-t0)/1000)+' s · '+(gen.info||'GPU'));
     let out=r.text.replace(/^\s*\[\w+\]\s*/,'').trim();
     if(r.truncated)out=trimToSentence(out);
     if(!out||isGarbage(out)){el.remove();hist.pop();bad++;return['sad',bad>1?'Sigo teniendo problemas para hablar bien. Prueba otro modelo, o recarga la página.':'Uy, me salió un galimatías. ¿Me lo repites?']}
-    bad=0;hist.push({role:'assistant',content:out});el.textContent=out;
+    bad=0;hist.push({role:'assistant',content:out});el.textContent=out;flushSpeech(out,true);
     return[guessExpr(out),out,true];
   }catch(e){clearInterval(tick);el.remove();hist.pop();console.error(e);return['sad','Se me enredaron las ideas ('+String(e&&e.message||e).slice(0,100)+').']}
 }
