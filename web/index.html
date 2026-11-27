@@ -19,9 +19,9 @@ h1 small{font:400 .8rem Inter,sans-serif;color:var(--muted)}
 .chips button{font:inherit;font-size:.85rem;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
 form{display:flex;gap:8px;max-width:520px;width:100%;align-self:center}
 input{flex:1;min-width:0;font:inherit;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
-#llm{border-style:dashed!important}
-#llm3,#llm4{border-style:dashed!important}
-#llm.ready,#llm3.ready,#llm4.ready{border-style:solid!important;border-color:var(--eye)!important}
+select{flex:1;min-width:0;font:inherit;padding:10px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
+#load{border-radius:12px!important;font-weight:600;background:var(--eye)!important;color:#fff;border:0!important;padding:0 16px!important}
+#load.ready{background:var(--mouth)!important}
 #mic{background:var(--eye)!important;padding:0 14px!important}
 #mic.on{background:var(--mouth)!important}
 form button{font:inherit;font-weight:600;padding:0 18px;border-radius:12px;border:0;background:var(--mouth);color:#fff}
@@ -31,7 +31,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--eye);outline-of
 <canvas id="screen" width="480" height="320"></canvas>
 <div id="log" aria-live="polite"></div>
 <div class="chips" id="chips"></div>
-<div class="chips"><button type="button" id="llm">🧠 Charla libre (≈400 MB, modo compatible)</button> <button type="button" id="llm3">✨ Más inteligente (≈1.1 GB, más lento)</button> <button type="button" id="llm4">⚡ Modo GPU rápido (experimental)</button></div>
+<div class="chips" style="flex-wrap:nowrap"><select id="model" aria-label="Modelo de charla libre"></select><button type="button" id="load">Cargar</button></div>
 <form id="f"><button type="button" id="mic" aria-label="Hablar">🎤</button><input id="q" autocomplete="off" placeholder="Háblale a Bit…" enterkeyhint="send"><button>Enviar</button></form>
 <script>
 const $=s=>document.querySelector(s);
@@ -152,18 +152,21 @@ function isGarbage(t){
   return false;
 }
 function trimToSentence(t){const m=t.match(/^[\s\S]*[.!?¿¡…]/);return m?m[0].trim():t.trim()}
-// Tres modos. CPU = no usa la GPU (más lento pero compatible). GPU = rápido, pero falla en algunos celulares.
+// CPU = no usa la GPU (más lento pero compatible). GPU = rápido, pero falla en algunos celulares.
 const MODES={
-  cpu_s:{kind:'cpu',repo:'Qwen/Qwen2.5-0.5B-Instruct-GGUF',file:'qwen2.5-0.5b-instruct-q4_k_m.gguf',btn:'#llm',on:'🧠 Charla libre activa (CPU)'},
-  cpu_b:{kind:'cpu',repo:'Qwen/Qwen2.5-1.5B-Instruct-GGUF',file:'qwen2.5-1.5b-instruct-q4_k_m.gguf',btn:'#llm3',on:'✨ Modelo 1.5B activo (CPU)'},
-  gpu:{kind:'gpu',id:'Qwen2.5-1.5B-Instruct-q4f32_1-MLC',btn:'#llm4',on:'⚡ Modo GPU activo'}
+  gemma1:{kind:'cpu',name:'Gemma 3 1B · CPU · ≈0.8 GB (buen español)',repo:'unsloth/gemma-3-1b-it-GGUF',file:'gemma-3-1b-it-Q4_K_M.gguf'},
+  llama1:{kind:'cpu',name:'Llama 3.2 1B · CPU · ≈0.8 GB',repo:'bartowski/Llama-3.2-1B-Instruct-GGUF',file:'Llama-3.2-1B-Instruct-Q4_K_M.gguf'},
+  qwen05:{kind:'cpu',name:'Qwen 2.5 0.5B · CPU · ≈0.4 GB (el más ligero)',repo:'Qwen/Qwen2.5-0.5B-Instruct-GGUF',file:'qwen2.5-0.5b-instruct-q4_k_m.gguf'},
+  qwen15:{kind:'cpu',name:'Qwen 2.5 1.5B · CPU · ≈1.1 GB',repo:'Qwen/Qwen2.5-1.5B-Instruct-GGUF',file:'qwen2.5-1.5b-instruct-q4_k_m.gguf'},
+  qwen3:{kind:'cpu',name:'Qwen 2.5 3B · CPU · ≈2 GB (lento)',repo:'Qwen/Qwen2.5-3B-Instruct-GGUF',file:'qwen2.5-3b-instruct-q4_k_m.gguf'},
+  gpu:{kind:'gpu',name:'Qwen 2.5 1.5B · GPU · experimental',id:'Qwen2.5-1.5B-Instruct-q4f32_1-MLC'}
 };
-const LABELS={'#llm':'🧠 Charla libre (≈400 MB, modo compatible)','#llm3':'✨ Más inteligente (≈1.1 GB, más lento)','#llm4':'⚡ Modo GPU rápido (experimental)'};
+for(const[k,m]of Object.entries(MODES)){const o=document.createElement('option');o.value=k;o.textContent=m.name;$('#model').append(o)}
 let gen=null,unload=null;   // gen(messages) -> {text,truncated}
 async function loadLLM(mode){
   const M=MODES[mode];if(!M||loading)return;
   if(M.kind==='gpu'&&!navigator.gpu){say('bot','Tu navegador no tiene WebGPU. Usa el modo compatible.');return}
-  loading=true;const btns=Object.values(MODES).map(m=>$(m.btn));btns.forEach(b=>b.disabled=true);expr='thinking';
+  loading=true;$('#load').disabled=$('#model').disabled=true;expr='thinking';const t0=Date.now();
   try{
     if(unload){try{await unload()}catch(e){}unload=null;gen=null;engine=null}
     if(M.kind==='cpu'){
@@ -184,31 +187,29 @@ async function loadLLM(mode){
       unload=()=>e.unload();
     }
     engine=true;bad=0;
-    for(const m of Object.values(MODES)){$(m.btn).textContent=LABELS[m.btn];$(m.btn).classList.remove('ready')}
-    $(M.btn).textContent=M.on;$(M.btn).classList.add('ready');status('modelo local · sin tokens');
-    try{localStorage.setItem('llm2',mode)}catch(e){}
-    const ok='Listo, ya puedo conversar.';say('bot',ok);speak(ok);
+    $('#model').value=mode;$('#load').textContent='Activo';$('#load').classList.add('ready');status('modelo local · sin tokens');
+    try{localStorage.setItem('llm3',mode)}catch(e){}
+    const ok='Listo, ya puedo conversar. Modelo cargado en '+Math.round((Date.now()-t0)/1000)+' segundos.';say('bot',ok);speak(ok);
   }catch(e){
     engine=null;gen=null;unload=null;status('sin tokens · gratis');console.error(e);
-    say('bot','No pude cargar ese modo: '+String(e&&e.message||e).slice(0,120));
+    $('#load').textContent='Cargar';$('#load').classList.remove('ready');say('bot','No pude cargar «'+M.name.split(' · ')[0]+'»: '+String(e&&e.message||e).slice(0,140));
   }
-  loading=false;btns.forEach(b=>b.disabled=false);expr='neutral';
+  loading=false;$('#load').disabled=$('#model').disabled=false;expr='neutral';
 }
 async function chat(text){
   if(!engine||!gen)return fallback();
   hist.push({role:'user',content:text});while(hist.length>12)hist.shift();
   try{
-    const r=await gen([{role:'system',content:LLM_SYS},...SHOTS,...hist]);
+    const t0=Date.now();const tick=setInterval(()=>status('pensando… '+Math.round((Date.now()-t0)/1000)+' s'),1000);
+    let r;try{r=await Promise.race([gen([{role:'system',content:LLM_SYS},...SHOTS,...hist]),new Promise((_,rej)=>setTimeout(()=>rej(new Error('tardó más de 2 minutos')),120000))])}finally{clearInterval(tick);status('respondió en '+Math.round((Date.now()-t0)/1000)+' s')}
     let out=r.text.replace(/^\s*\[\w+\]\s*/,'').trim();
     if(r.truncated)out=trimToSentence(out);
     if(!out||isGarbage(out)){hist.pop();bad++;return['sad',bad>1?'Sigo teniendo problemas para hablar bien. Prueba otro modo de charla libre, o recarga la página.':'Uy, me salió un galimatías. ¿Me lo repites?']}
     bad=0;hist.push({role:'assistant',content:out});
     return[guessExpr(out),out];
-  }catch(e){hist.pop();console.error(e);return['sad','Se me enredaron las ideas. ¿Me lo repites?']}
+  }catch(e){hist.pop();console.error(e);return['sad','Se me enredaron las ideas ('+String(e&&e.message||e).slice(0,100)+').']}
 }
-$('#llm').addEventListener('click',()=>loadLLM('cpu_s'));
-$('#llm3').addEventListener('click',()=>loadLLM('cpu_b'));
-$('#llm4').addEventListener('click',()=>loadLLM('gpu'));
-try{const k=localStorage.getItem('llm2');if(k&&MODES[k])loadLLM(k)}catch(e){}
+$('#load').addEventListener('click',()=>loadLLM($('#model').value));
+try{const k=localStorage.getItem('llm3');if(k&&MODES[k])loadLLM(k)}catch(e){}
 say('bot','¡Hola! Soy Bit. Toca el micrófono o escríbeme.');
 </script></body></html>
