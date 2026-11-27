@@ -20,8 +20,8 @@ h1 small{font:400 .8rem Inter,sans-serif;color:var(--muted)}
 form{display:flex;gap:8px;max-width:520px;width:100%;align-self:center}
 input{flex:1;min-width:0;font:inherit;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
 #llm{border-style:dashed!important}
-#llm3{border-style:dashed!important}
-#llm.ready{border-style:solid!important;border-color:var(--eye)!important}
+#llm3,#llm4{border-style:dashed!important}
+#llm.ready,#llm3.ready,#llm4.ready{border-style:solid!important;border-color:var(--eye)!important}
 #mic{background:var(--eye)!important;padding:0 14px!important}
 #mic.on{background:var(--mouth)!important}
 form button{font:inherit;font-weight:600;padding:0 18px;border-radius:12px;border:0;background:var(--mouth);color:#fff}
@@ -31,7 +31,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--eye);outline-of
 <canvas id="screen" width="480" height="320"></canvas>
 <div id="log" aria-live="polite"></div>
 <div class="chips" id="chips"></div>
-<div class="chips"><button type="button" id="llm">🧠 Activar charla libre (≈1 GB, usa Wi-Fi)</button> <button type="button" id="llm3">✨ Probar modelo más inteligente (3B, ≈2 GB)</button></div>
+<div class="chips"><button type="button" id="llm">🧠 Charla libre (≈400 MB, modo compatible)</button> <button type="button" id="llm3">✨ Más inteligente (≈1.1 GB, más lento)</button> <button type="button" id="llm4">⚡ Modo GPU rápido (experimental)</button></div>
 <form id="f"><button type="button" id="mic" aria-label="Hablar">🎤</button><input id="q" autocomplete="off" placeholder="Háblale a Bit…" enterkeyhint="send"><button>Enviar</button></form>
 <script>
 const $=s=>document.querySelector(s);
@@ -121,8 +121,6 @@ $('#mic').addEventListener('click',()=>{
 });
 
 /* ---- charla libre con modelo local en el navegador (WebLLM + WebGPU) ---- */
-// Versiones q4f32: evitan los cálculos en 16 bits, que en muchas GPUs de celular producen texto basura.
-const MODELS={small:'Qwen2.5-1.5B-Instruct-q4f32_1-MLC',big:'Qwen2.5-3B-Instruct-q4f32_1-MLC'};
 // Prompt corto y claro: los modelos pequeños se pierden con muchas reglas.
 const LLM_SYS=`Eres Bit, una robotita de escritorio. Eres nerd, curiosa y muy tierna. Te encantan los dinosaurios, Pokémon, los videojuegos, la ciencia ficción y la fantasía, pero hablas de eso solo cuando viene al caso.
 Conversas en español como una amiga: respondes de verdad a lo que te dicen, cuentas algo tuyo o un dato curioso, y sigues la charla con una pregunta natural. Respondes con 2 o 3 frases completas, sin listas ni emojis. Si no sabes algo, lo admites con humor.`;
@@ -154,41 +152,63 @@ function isGarbage(t){
   return false;
 }
 function trimToSentence(t){const m=t.match(/^[\s\S]*[.!?¿¡…]/);return m?m[0].trim():t.trim()}
-async function loadLLM(which){
-  which=which==='big'?'big':'small';
-  if(loading)return;
-  if(!navigator.gpu){say('bot','Tu navegador no tiene WebGPU, así que no puedo cargar el modelo. Prueba con Chrome actualizado en un celular reciente.');return}
-  loading=true;$('#llm').disabled=$('#llm3').disabled=true;expr='thinking';
+// Tres modos. CPU = no usa la GPU (más lento pero compatible). GPU = rápido, pero falla en algunos celulares.
+const MODES={
+  cpu_s:{kind:'cpu',repo:'Qwen/Qwen2.5-0.5B-Instruct-GGUF',file:'qwen2.5-0.5b-instruct-q4_k_m.gguf',btn:'#llm',on:'🧠 Charla libre activa (CPU)'},
+  cpu_b:{kind:'cpu',repo:'Qwen/Qwen2.5-1.5B-Instruct-GGUF',file:'qwen2.5-1.5b-instruct-q4_k_m.gguf',btn:'#llm3',on:'✨ Modelo 1.5B activo (CPU)'},
+  gpu:{kind:'gpu',id:'Qwen2.5-1.5B-Instruct-q4f32_1-MLC',btn:'#llm4',on:'⚡ Modo GPU activo'}
+};
+const LABELS={'#llm':'🧠 Charla libre (≈400 MB, modo compatible)','#llm3':'✨ Más inteligente (≈1.1 GB, más lento)','#llm4':'⚡ Modo GPU rápido (experimental)'};
+let gen=null,unload=null;   // gen(messages) -> {text,truncated}
+async function loadLLM(mode){
+  const M=MODES[mode];if(!M||loading)return;
+  if(M.kind==='gpu'&&!navigator.gpu){say('bot','Tu navegador no tiene WebGPU. Usa el modo compatible.');return}
+  loading=true;const btns=Object.values(MODES).map(m=>$(m.btn));btns.forEach(b=>b.disabled=true);expr='thinking';
   try{
-    if(engine){try{await engine.unload()}catch(e){}engine=null}
-    const webllm=await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm');
-    engine=await webllm.CreateMLCEngine(MODELS[which],{initProgressCallback:p=>status(p.text.slice(0,60))});
-    $('#llm').textContent='🧠 Charla libre activa';$('#llm').classList.add('ready');
-    $('#llm3').textContent=which==='big'?'✨ Modelo 3B activo':'✨ Probar modelo más inteligente (3B, ≈2 GB)';
-    status('modelo local · sin tokens');
-    try{localStorage.setItem('llm',which)}catch(e){}
-    const ok='Listo, ya puedo conversar de cualquier tema.';say('bot',ok);speak(ok);
+    if(unload){try{await unload()}catch(e){}unload=null;gen=null;engine=null}
+    if(M.kind==='cpu'){
+      const base='https://cdn.jsdelivr.net/npm/@wllama/wllama@3.13.0/esm/';
+      const {Wllama}=await import(base+'index.js');
+      const wasm=(await import(base+'wasm-from-cdn.js')).default;
+      const w=new Wllama(wasm);
+      await w.loadModelFromHF({repo:M.repo,file:M.file},{n_ctx:2048,n_gpu_layers:0,
+        progressCallback:({loaded,total})=>status('Descargando '+Math.round(loaded/total*100)+'%')});
+      gen=async msgs=>{const r=await w.createChatCompletion({messages:msgs,max_tokens:200,temperature:.7,top_p:.9,top_k:40});
+        const c=r.choices[0];return{text:c.message.content||'',truncated:c.finish_reason==='length'}};
+      unload=()=>w.exit();
+    }else{
+      const webllm=await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm');
+      const e=await webllm.CreateMLCEngine(M.id,{initProgressCallback:p=>status(p.text.slice(0,60))});
+      gen=async msgs=>{const r=await e.chat.completions.create({messages:msgs,max_tokens:260,temperature:.7,top_p:.9});
+        const c=r.choices[0];return{text:c.message.content||'',truncated:c.finish_reason==='length'}};
+      unload=()=>e.unload();
+    }
+    engine=true;bad=0;
+    for(const m of Object.values(MODES)){$(m.btn).textContent=LABELS[m.btn];$(m.btn).classList.remove('ready')}
+    $(M.btn).textContent=M.on;$(M.btn).classList.add('ready');status('modelo local · sin tokens');
+    try{localStorage.setItem('llm2',mode)}catch(e){}
+    const ok='Listo, ya puedo conversar.';say('bot',ok);speak(ok);
   }catch(e){
-    engine=null;status('sin tokens · gratis');
-    say('bot','No pude cargar el modelo. Puede que tu celular no tenga memoria suficiente'+(which==='big'?'; prueba con el modelo normal.':'.'));
+    engine=null;gen=null;unload=null;status('sin tokens · gratis');console.error(e);
+    say('bot','No pude cargar ese modo: '+String(e&&e.message||e).slice(0,120));
   }
-  loading=false;$('#llm').disabled=$('#llm3').disabled=false;expr='neutral';
+  loading=false;btns.forEach(b=>b.disabled=false);expr='neutral';
 }
 async function chat(text){
-  if(!engine)return fallback();
+  if(!engine||!gen)return fallback();
   hist.push({role:'user',content:text});while(hist.length>12)hist.shift();
   try{
-    const r=await engine.chat.completions.create({messages:[{role:'system',content:LLM_SYS},...SHOTS,...hist],max_tokens:260,temperature:.7,top_p:.9});
-    const c=r.choices[0];let out=(c.message.content||'').replace(/^\s*\[\w+\]\s*/,'').trim();
-    if(c.finish_reason==='length')out=trimToSentence(out);
-    if(!out||isGarbage(out)){hist.pop();bad++;return['sad',bad>1?'Sigo teniendo problemas para hablar bien. Prueba recargar la página y activar la charla libre otra vez.':'Uy, me salió un galimatías. ¿Me lo repites?']}
-    bad=0;
-    hist.push({role:'assistant',content:out});
+    const r=await gen([{role:'system',content:LLM_SYS},...SHOTS,...hist]);
+    let out=r.text.replace(/^\s*\[\w+\]\s*/,'').trim();
+    if(r.truncated)out=trimToSentence(out);
+    if(!out||isGarbage(out)){hist.pop();bad++;return['sad',bad>1?'Sigo teniendo problemas para hablar bien. Prueba otro modo de charla libre, o recarga la página.':'Uy, me salió un galimatías. ¿Me lo repites?']}
+    bad=0;hist.push({role:'assistant',content:out});
     return[guessExpr(out),out];
-  }catch(e){hist.pop();return['sad','Se me enredaron las ideas. ¿Me lo repites?']}
+  }catch(e){hist.pop();console.error(e);return['sad','Se me enredaron las ideas. ¿Me lo repites?']}
 }
-$('#llm').addEventListener('click',()=>loadLLM('small'));
-$('#llm3').addEventListener('click',()=>loadLLM('big'));
-try{const k=localStorage.getItem('llm');if(k==='on'||k==='small')loadLLM('small');else if(k==='big')loadLLM('big')}catch(e){}
+$('#llm').addEventListener('click',()=>loadLLM('cpu_s'));
+$('#llm3').addEventListener('click',()=>loadLLM('cpu_b'));
+$('#llm4').addEventListener('click',()=>loadLLM('gpu'));
+try{const k=localStorage.getItem('llm2');if(k&&MODES[k])loadLLM(k)}catch(e){}
 say('bot','¡Hola! Soy Bit. Toca el micrófono o escríbeme.');
 </script></body></html>
